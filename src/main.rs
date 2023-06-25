@@ -1,4 +1,4 @@
-use rand::*;
+use rand::{*, seq::SliceRandom};
 
 use bevy::{prelude::*, window::WindowResolution};
 
@@ -54,6 +54,7 @@ fn main() {
                 primary_window: Window {
                     resolution: WindowResolution::new(WIDTH, HEIGHT),
                     resizable: false,
+                    title: "Snake game".to_owned(),
                     ..Default::default()
                 }.into(),
                 ..Default::default()
@@ -196,7 +197,7 @@ fn snake_collision_check(
 ) {
     fn die() { 
         println!("dead");
-        while true { } 
+        loop { } 
     }
 
     for (head, head_cell) in &heads {
@@ -257,22 +258,23 @@ fn handle_apple_eaten(
     cells: Query<&Cell>,
     mut apple_events: EventReader<AppleEaten>,
 ) {
-    if !apple_events.is_empty(){
+    if !apple_events.is_empty() {
         println!("Apple eaten!");
+    
+        let positions = (0..BOARD_WIDTH as i32)
+            .map(|x| (0..BOARD_HEIGHT as i32).map(move |y| Vec2::new(x as f32, y as f32)))
+            .flatten()
+            .filter(|v| !cells.iter().any(|cell| cell.position == *v))
+            .collect::<Vec<Vec2>>();
+
         let mut rng = rand::thread_rng();
 
         for _ in apple_events.iter() {
-            let apple_position = loop {
-                let result = Vec2::new(
-                    rng.gen_range(0..(BOARD_WIDTH as i32)) as f32, 
-                    rng.gen_range(0..(BOARD_HEIGHT as i32)) as f32,
-                );
-                if !cells.iter().any(|cell| cell.position == result) {
-                    break result;
-                }
-            };
-
-            spawn_apple(&mut commands, apple_position);
+            if let Some(apple_position) = positions.choose(&mut rng) {
+                spawn_apple(&mut commands, *apple_position);
+            } else {
+                // TODO: win game
+            }
         }
     }
 }
