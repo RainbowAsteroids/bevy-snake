@@ -1,6 +1,5 @@
-use rand::{*, seq::SliceRandom};
-
-use bevy::{prelude::*, window::WindowResolution};
+use rand::seq::SliceRandom;
+use bevy::{prelude::*, window::WindowResolution, app::AppExit};
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
@@ -15,7 +14,14 @@ const SECONDS_BETWEEN_MOVES: f32 = 1. / 12.;
 
 const HEAD_COLOR: Color = Color::WHITE;
 const TAIL_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
+const DEAD_SNAKE_COLOR: Color = Color::rgb(0.3, 0.05, 0.05);
+
 const APPLE_COLOR: Color = Color::RED;
+
+const TEXT_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+const UI_COLOR: Color = Color::rgb(0.15, 0.15, 0.15);
+const BUTTON_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
+const BUTTON_HOVER_COLOR: Color = Color::rgb(0.4, 0.4, 0.4);
 
 #[derive(Component)]
 struct Head {
@@ -43,8 +49,46 @@ struct Cell {
     position: Vec2,
 }
 
+#[derive(Component)]
+struct Menu;
+#[derive(Component)]
+struct PlayButton;
+#[derive(Component)]
+struct QuitButton;
+
 pub struct AppleEaten;
 pub struct SpawnTail(Entity);
+
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
+enum AppState {
+    #[default]
+    StartScreen,
+    LoseScreen,
+    WinScreen,
+    Playing,
+}
+
+impl AppState {
+    fn title(&self) -> &str {
+        match self {
+            AppState::StartScreen => "Snake",
+            AppState::LoseScreen => "Game Over",
+            AppState::WinScreen => "You Win",
+            AppState::Playing => panic!("AppState::Playing.title() is undefined")
+        }
+    }
+
+    fn play_button_title(&self) -> &str {
+        if let AppState::Playing = self {
+            panic!("AppState::Playing.play_button_title() is undefined");
+        } else if let AppState::StartScreen = self {
+            "Play"
+        } else {
+            "Play again"
+        }
+    }
+}
 
 fn main() {
     App::new()
@@ -65,19 +109,153 @@ fn main() {
 
         .add_system(fix_position)
 
+        .add_state::<AppState>()
+
         .add_event::<SpawnTail>()
-        .add_startup_system(spawn_snake)
-        .add_system(move_snake)
-        .add_system(snake_input.before(move_snake))
-        .add_system(handle_spawn_tail)
-        .add_system(snake_collision_check)
+        .add_system(spawn_snake.in_schedule(OnEnter(AppState::Playing)))
+        .add_system(move_snake.in_set(OnUpdate(AppState::Playing)))
+        .add_system(snake_input.before(move_snake).in_set(OnUpdate(AppState::Playing)))
+        .add_system(handle_spawn_tail.in_set(OnUpdate(AppState::Playing)))
+        .add_system(snake_collision_check.in_set(OnUpdate(AppState::Playing)))
+        .add_system(red_snake.in_schedule(OnEnter(AppState::LoseScreen)))
         
         .add_event::<AppleEaten>()
-        .add_startup_system(spawn_first_apple)
-        .add_system(apple_collision)
-        .add_system(handle_apple_eaten)
+        .add_system(spawn_first_apple.in_schedule(OnEnter(AppState::Playing)))
+        .add_system(apple_collision.in_set(OnUpdate(AppState::Playing)))
+        .add_system(handle_apple_eaten.in_set(OnUpdate(AppState::Playing)))
+
+        .add_system(spawn_screen.in_schedule(OnEnter(AppState::LoseScreen)))
+        .add_system(spawn_screen.in_schedule(OnEnter(AppState::WinScreen)))
+        .add_system(spawn_screen.in_schedule(OnEnter(AppState::StartScreen)))
+
+        .add_system(button_hover.in_set(OnUpdate(AppState::LoseScreen)))
+        .add_system(button_hover.in_set(OnUpdate(AppState::WinScreen)))
+        .add_system(button_hover.in_set(OnUpdate(AppState::StartScreen)))
+
+        .add_system(button_click.in_set(OnUpdate(AppState::LoseScreen)))
+        .add_system(button_click.in_set(OnUpdate(AppState::WinScreen)))
+        .add_system(button_click.in_set(OnUpdate(AppState::StartScreen)))
+
+        .add_system(despawn_screen.in_schedule(OnExit(AppState::LoseScreen)))
+        .add_system(despawn_screen.in_schedule(OnExit(AppState::WinScreen)))
+        .add_system(despawn_screen.in_schedule(OnExit(AppState::StartScreen)))
+
+        .add_system(game_cleanup.in_schedule(OnExit(AppState::LoseScreen)))
+        .add_system(game_cleanup.in_schedule(OnExit(AppState::WinScreen)))
+        .add_system(game_cleanup.in_schedule(OnExit(AppState::StartScreen)))
 
         .run();
+}
+
+fn make_button(
+    commands: &mut ChildBuilder,
+    text: &str,
+    asset_server: &Res<AssetServer>,
+    component: impl Bundle,
+) {
+    commands.spawn(ButtonBundle {
+        style: Style { 
+            min_size: Size::new(Val::Px(0.), Val::Px(40.)),
+            padding: UiRect::new(Val::Px(5.), Val::Px(5.), Val::Px(5.), Val::Px(5.)),
+            margin: UiRect::new(Val::Px(0.), Val::Px(5.), Val::Px(0.), Val::Px(5.)),
+            ..default()
+        },
+        background_color: BUTTON_COLOR.into(),
+        ..default()
+    }).with_children(|commands| {
+        commands.spawn(TextBundle::from_section(
+            text,
+            TextStyle {
+                font_size: 30.,
+                color: TEXT_COLOR.into(),
+                font: asset_server.load("source-code-pro.ttf")
+            }
+        ));
+    }).insert(component);
+}
+
+fn spawn_screen(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    app_state: Res<State<AppState>>,
+) {
+    commands.spawn(NodeBundle {
+        style: Style {
+            size: Size::new(Val::Percent(100.), Val::Percent(100.)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        ..default()
+    }).insert(Menu)
+    .with_children(|commands| {
+        commands.spawn(NodeBundle {
+            style: Style {
+                size: Size::new(Val::Percent(40.), Val::Percent(25.)),
+                padding: UiRect::new(Val::Percent(5.), Val::Percent(5.), Val::Percent(5.), Val::Percent(5.)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                //min_size: Size::new(Val::Percent(0.), Val::Percent(0.)),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            background_color: UI_COLOR.into(),
+            ..default()
+        }).with_children(|commands| {
+            commands.spawn(TextBundle::from_section(
+                app_state.0.title(),
+                TextStyle {
+                    font_size: 50.,
+                    color: TEXT_COLOR.into(),
+                    font: asset_server.load("source-code-pro.ttf")
+                }
+            ).with_style(Style {
+                margin: UiRect::new(Val::Px(0.), Val::Px(10.), Val::Px(0.), Val::Px(10.)),
+                ..default()
+            }));
+            make_button(commands, app_state.0.play_button_title(), &asset_server, PlayButton);
+            make_button(commands, "Quit", &asset_server, QuitButton);
+        });
+    });
+}
+
+fn despawn_screen(mut commands: Commands, menu: Query<Entity, With<Menu>>) {
+    commands.entity(menu.single()).despawn_recursive();
+}
+
+fn game_cleanup(
+    mut commands: Commands,
+    heads: Query<Entity, With<Head>>,
+    apples: Query<Entity, With<Apple>>,
+    tails: Query<Entity, With<Tail>>
+) {
+    for entity in heads.iter().chain(apples.iter()).chain(tails.iter()) {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
+fn button_hover(
+    mut interaction_query: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, With<Button>)>
+) {
+    for (interaction, mut color) in &mut interaction_query {
+        match *interaction {
+            Interaction::Clicked | Interaction::Hovered => *color = BUTTON_HOVER_COLOR.into(),
+            Interaction::None => *color = BUTTON_COLOR.into()
+        }
+    }
+}
+
+fn button_click(
+    play_button_interaction: Query<&Interaction, (Changed<Interaction>, With<PlayButton>)>,
+    quit_button_interaction: Query<&Interaction, (Changed<Interaction>, With<QuitButton>)>,
+    mut app_state: ResMut<NextState<AppState>>,
+    mut app_exit: EventWriter<AppExit>
+) {
+    if let Ok(Interaction::Clicked) = play_button_interaction.get_single() {
+        app_state.set(AppState::Playing);
+    } else if let Ok(Interaction::Clicked) = quit_button_interaction.get_single() {
+        app_exit.send(AppExit);
+    }
 }
 
 fn spawn_camera(mut commands: Commands) {
@@ -194,23 +372,19 @@ fn snake_input(
 fn snake_collision_check(
     heads: Query<(&Head, &Cell)>,
     tails: Query<&Cell, With<Tail>>,
+    mut app_state: ResMut<NextState<AppState>>
 ) {
-    fn die() { 
-        println!("dead");
-        loop { } 
-    }
-
     for (head, head_cell) in &heads {
         let position = head_cell.position;
 
         if position.x < 0. || position.x >= BOARD_WIDTH || position.y < 0. || position.y >= BOARD_HEIGHT {
-            die();
+            app_state.set(AppState::LoseScreen);
         }
 
         if head.body.len() >= 3 {
             for tail_cell in head.body.iter().cloned().map(|e| tails.get(e).unwrap()) {
                 if tail_cell.position == position && head.body.len() != 2 {
-                    die();
+                    app_state.set(AppState::LoseScreen);
                 }
             }
         }
@@ -257,10 +431,9 @@ fn handle_apple_eaten(
     mut commands: Commands,
     cells: Query<&Cell>,
     mut apple_events: EventReader<AppleEaten>,
+    mut app_state: ResMut<NextState<AppState>>
 ) {
     if !apple_events.is_empty() {
-        println!("Apple eaten!");
-    
         let positions = (0..BOARD_WIDTH as i32)
             .map(|x| (0..BOARD_HEIGHT as i32).map(move |y| Vec2::new(x as f32, y as f32)))
             .flatten()
@@ -273,8 +446,14 @@ fn handle_apple_eaten(
             if let Some(apple_position) = positions.choose(&mut rng) {
                 spawn_apple(&mut commands, *apple_position);
             } else {
-                // TODO: win game
+                app_state.set(AppState::WinScreen);
             }
         }
+    }
+}
+
+fn red_snake(mut sprites: Query<&mut Sprite, Or<(With<Head>, With<Tail>)>>) {
+    for mut sprite in &mut sprites {
+        sprite.color = DEAD_SNAKE_COLOR
     }
 }
