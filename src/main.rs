@@ -1,5 +1,7 @@
+use std::{fs::{File, read_to_string}, io::{Write, Seek, SeekFrom}};
 use rand::seq::SliceRandom;
 use bevy::{prelude::*, window::WindowResolution, app::AppExit};
+use directories::ProjectDirs;
 
 const WIDTH: f32 = 800.;
 const HEIGHT: f32 = 600.;
@@ -10,7 +12,7 @@ const CELL_MARGIN: f32 = 10.;
 const BOARD_WIDTH: f32 = WIDTH / CELL_SIZE;
 const BOARD_HEIGHT: f32 = HEIGHT / CELL_SIZE;
 
-const SECONDS_BETWEEN_MOVES: f32 = 1. / 12.;
+const SECONDS_BETWEEN_MOVES: f32 = 1. / 10.;
 
 const HEAD_COLOR: Color = Color::WHITE;
 const TAIL_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
@@ -51,9 +53,60 @@ struct PlayButton;
 #[derive(Component)]
 struct QuitButton;
 
-pub struct AppleEaten;
-pub struct SpawnTail(Entity);
+struct AppleEaten;
+struct SpawnTail(Entity);
 
+#[derive(Resource)]
+struct ScoreManager {
+    score: u32,
+    high_score: u32,
+    file: File
+}
+
+impl Default for ScoreManager {
+    fn default() -> Self {
+        let proj_dirs = ProjectDirs::from("com", "rainbowasteroids", "bevy-snake").unwrap();
+        let save_file_path = {
+            let mut path = proj_dirs.data_dir().to_path_buf();
+            path.push("save.dat");
+            path.into_boxed_path()
+        };
+
+        let high_score = if save_file_path.is_file() {
+            read_to_string(&save_file_path).expect("Failed to read save file").parse::<u32>().unwrap_or_else(|e| {
+                println!("Failed to read save file: {}", e.to_string());
+                0
+            })
+        } else {
+            0
+        };
+
+        std::fs::create_dir_all(proj_dirs.data_dir()).expect("Could not create directory for save file");
+        let mut result = ScoreManager { 
+            score: 0, 
+            high_score, 
+            file: File::create(save_file_path).expect("Unable to open save file for writing")
+        };
+
+        result.sync();
+
+        result
+    }
+}
+
+impl ScoreManager {
+    fn sync(&mut self) {
+        if self.score > self.high_score {
+            self.high_score = self.score;
+        }
+
+        self.file.seek(SeekFrom::Start(0)).expect("Could not seek");
+        write!(self.file, "{}", self.high_score).expect("Could not write to save file");
+        self.file.flush().expect("Could not flush to save file");
+
+        self.score = 0;
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 enum AppState {
@@ -120,6 +173,7 @@ fn main() {
         .add_system(snake_collision_check.in_set(OnUpdate(AppState::Playing)))
         .add_system(red_snake.in_schedule(OnEnter(AppState::LoseScreen)))
         
+        .init_resource::<ScoreManager>()
         .add_event::<AppleEaten>()
         .add_system(spawn_first_apple.in_schedule(OnEnter(AppState::Playing)))
         .add_system(apple_collision.in_set(OnUpdate(AppState::Playing)))
@@ -179,6 +233,7 @@ fn spawn_screen(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     app_state: Res<State<AppState>>,
+    mut score: ResMut<ScoreManager>
 ) {
     commands.spawn(NodeBundle {
         style: Style {
@@ -192,7 +247,7 @@ fn spawn_screen(
     .with_children(|commands| {
         commands.spawn(NodeBundle {
             style: Style {
-                size: Size::new(Val::Percent(40.), Val::Percent(25.)),
+                size: Size::new(Val::Percent(45.), Val::Percent(40.)),
                 padding: UiRect::new(Val::Percent(5.), Val::Percent(5.), Val::Percent(5.), Val::Percent(5.)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -214,10 +269,39 @@ fn spawn_screen(
                 margin: UiRect::new(Val::Px(0.), Val::Px(10.), Val::Px(0.), Val::Px(10.)),
                 ..default()
             }));
+
+            if let AppState::LoseScreen = app_state.0 {
+                commands.spawn(TextBundle::from_section(
+                    format!("Score: {}", score.score),
+                    TextStyle {
+                        font_size: 25.,
+                        color: TEXT_COLOR.into(),
+                        font: asset_server.load("source-code-pro.ttf")
+                    }).with_style(Style {
+                        margin: UiRect::new(Val::Px(0.), Val::Px(10.), Val::Px(0.), Val::Px(10.)),
+                        ..default()
+                    })
+                );
+
+                commands.spawn(TextBundle::from_section(
+                    format!("High score: {}", score.high_score),
+                    TextStyle {
+                        font_size: 25.,
+                        color: TEXT_COLOR.into(),
+                        font: asset_server.load("source-code-pro.ttf")
+                    }).with_style(Style {
+                        margin: UiRect::new(Val::Px(0.), Val::Px(10.), Val::Px(0.), Val::Px(10.)),
+                        ..default()
+                    })
+                );
+
+            }
+
             make_button(commands, app_state.0.play_button_title(), &asset_server, PlayButton);
             make_button(commands, "Quit", &asset_server, QuitButton);
         });
     });
+    score.sync();
 }
 
 fn despawn_screen(mut commands: Commands, menu: Query<Entity, With<Menu>>) {
@@ -428,9 +512,12 @@ fn handle_apple_eaten(
     mut commands: Commands,
     transforms: Query<&Transform, Or<(With<Apple>, With<Tail>, With<Head>)>>,
     mut apple_events: EventReader<AppleEaten>,
-    mut app_state: ResMut<NextState<AppState>>
+    mut app_state: ResMut<NextState<AppState>>,
+    mut score: ResMut<ScoreManager>
 ) {
     if !apple_events.is_empty() {
+        score.score += 1;
+
         let positions = (0..BOARD_WIDTH as i32)
             .map(|x| (0..BOARD_HEIGHT as i32).map(move |y| tilemap_to_global(x, y)))
             .flatten()
