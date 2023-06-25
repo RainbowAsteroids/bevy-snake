@@ -30,7 +30,7 @@ struct Head {
 
 #[derive(Component)]
 struct Velocity { 
-    vector: Vec2 
+    vector: Vec3
 }
 
 #[derive(Component)]
@@ -43,11 +43,6 @@ struct Tail;
 
 #[derive(Component)]
 struct Apple;
-
-#[derive(Component)]
-struct Cell {
-    position: Vec2,
-}
 
 #[derive(Component)]
 struct Menu;
@@ -90,6 +85,14 @@ impl AppState {
     }
 }
 
+fn tilemap_to_global(x: i32, y: i32) -> Vec3 {
+    Vec3::new(
+        (x as f32 * CELL_SIZE) - (WIDTH / 2.) + (CELL_SIZE / 2.),
+        (-y as f32 * CELL_SIZE) + (HEIGHT / 2.) - (CELL_SIZE / 2.),
+        0.
+    )
+}
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::hsl(0., 0., 0.1)))
@@ -106,8 +109,6 @@ fn main() {
         ))
 
         .add_startup_system(spawn_camera)
-
-        .add_system(fix_position)
 
         .add_state::<AppState>()
 
@@ -269,28 +270,21 @@ fn spawn_snake(mut commands: Commands) {
             custom_size: Vec2::new(CELL_SIZE - CELL_MARGIN, CELL_SIZE - CELL_MARGIN).into(),
             ..default()
         },
-        transform: Transform::from_translation(Vec3::new(0., 0., 0.)),
+        transform: Transform::from_translation(tilemap_to_global(5, 5)),
         ..default()
     })
     .insert(Head { body: Vec::new() })
-    .insert(Velocity { vector: Vec2::new(1., 0.) })
-    .insert(MoveTimer { timer: Timer::from_seconds(SECONDS_BETWEEN_MOVES, TimerMode::Repeating) })
-    .insert(Cell { position: Vec2::new(5., 5.) });
+    .insert(Velocity { vector: Vec3::new(CELL_SIZE, 0., 0.) })
+    .insert(MoveTimer { timer: Timer::from_seconds(SECONDS_BETWEEN_MOVES, TimerMode::Repeating) });
 }
 
-fn fix_position(mut cells: Query<(&Cell, &mut Transform)>) {
-    for (cell, mut transform) in &mut cells {
-        transform.translation.x = (cell.position.x * CELL_SIZE) - (WIDTH / 2.) + (CELL_SIZE / 2.);
-        transform.translation.y = (-cell.position.y * CELL_SIZE) + (HEIGHT / 2.) - (CELL_SIZE / 2.);
-    }
-}
 
 fn move_snake(
     time: Res<Time>,
-    mut heads: Query<(&Head, &Velocity, &mut MoveTimer, &mut Cell)>, 
-    mut tail_query: Query<&mut Cell, (With<Tail>, Without<Head>)>
+    mut heads: Query<(&Head, &Velocity, &mut MoveTimer, &mut Transform)>, 
+    mut tail_transform_query: Query<&mut Transform, (With<Tail>, Without<Head>)>
 ) {
-    for (head, velocity, mut move_timer, mut head_cell) in &mut heads {
+    for (head, velocity, mut move_timer, mut head_transform) in &mut heads {
         move_timer.timer.tick(time.delta());
 
         if move_timer.timer.finished() {
@@ -299,31 +293,31 @@ fn move_snake(
             let next = iter.clone().skip(1).map(|e| Some(e)).chain(std::iter::once(None));
 
             for (entity, next_entity) in iter.zip(next) {
-                let position = next_entity.map(|e| tail_query.get(e).unwrap()).unwrap_or(&head_cell).position;
-                let mut tail = tail_query.get_mut(entity).unwrap();
+                let translation = next_entity.map(|e| tail_transform_query.get(e).unwrap()).unwrap_or(&head_transform).translation;
+                let mut tail_transform = tail_transform_query.get_mut(entity).unwrap();
 
-                if tail.position != position {
-                    tail.position = position;
+                if tail_transform.translation != translation {
+                    tail_transform.translation = translation;
                 }
             }
 
-            head_cell.position += velocity.vector;
+            head_transform.translation += velocity.vector;
         }
     }
 }
 
 fn handle_spawn_tail(
     mut commands: Commands, 
-    mut heads: Query<(&mut Head, &Cell)>,
-    tails: Query<&Cell, With<Tail>>,
+    mut heads: Query<(&mut Head, &Transform)>,
+    tail_transforms: Query<&Transform, With<Tail>>,
     mut tail_event: EventReader<SpawnTail>
 ) {
     for event in tail_event.iter() {
-        let (mut head, head_cell) = heads.get_mut(event.0).unwrap();
+        let (mut head, head_transform) = heads.get_mut(event.0).unwrap();
 
-        let position = head.body.last()
-            .map(|e| tails.get(e.clone()).unwrap())
-            .unwrap_or(head_cell).position;
+        let new_transform = head.body.last()
+            .map(|e| tail_transforms.get(e.clone()).unwrap())
+            .unwrap_or(head_transform);
 
         let entity = commands.spawn(SpriteBundle {
             sprite: Sprite {
@@ -331,11 +325,10 @@ fn handle_spawn_tail(
                 custom_size: Vec2::new(CELL_SIZE - CELL_MARGIN, CELL_SIZE - CELL_MARGIN).into(),
                 ..default()
             },
-            transform: Transform::from_translation(Vec3::new(0., 0., 0.)),
+            transform: *new_transform,
             ..default()
         })
         .insert(Tail)
-        .insert(Cell { position })
         .id();
 
         head.body.push(entity);
@@ -343,26 +336,26 @@ fn handle_spawn_tail(
 }
 
 fn snake_input(
-    mut heads: Query<(&mut Velocity, &Head, &Cell)>,
-    cells: Query<&Cell, With<Tail>>,
+    mut heads: Query<(&mut Velocity, &Head, &Transform)>,
+    cells: Query<&Transform, With<Tail>>,
     keys: Res<Input<KeyCode>>
 ) {
     let new_velocity = {
         if keys.any_pressed([KeyCode::A, KeyCode::Left]) {
-            Vec2::new(-1., 0.).into()
+            Vec3::new(-CELL_SIZE, 0., 0.).into()
         } else if keys.any_pressed([KeyCode::D, KeyCode::Right]) {
-            Vec2::new(1., 0.).into()
+            Vec3::new(CELL_SIZE, 0., 0.).into()
         } else if keys.any_pressed([KeyCode::W, KeyCode::Up]) {
-            Vec2::new(0., -1.).into()
+            Vec3::new(0., CELL_SIZE, 0.).into()
         } else if keys.any_pressed([KeyCode::S, KeyCode::Down]) {
-            Vec2::new(0., 1.).into()
+            Vec3::new(0., -CELL_SIZE, 0.).into()
         } else { None }
     };
 
     if let Some(v) = new_velocity {
-        for (mut velocity, head, head_cell) in &mut heads {
-            let prev_cell = head.body.first().map(|e| cells.get(e.clone()).unwrap());
-            if prev_cell.map_or(true, |cell| cell.position - v != head_cell.position) {
+        for (mut velocity, head, transform) in &mut heads {
+            let prev_transform = head.body.first().map(|e| cells.get(e.clone()).unwrap());
+            if prev_transform.map_or(true, |t| t.translation - v != transform.translation) {
                 velocity.vector = v;
             }
         }
@@ -370,20 +363,24 @@ fn snake_input(
 }
 
 fn snake_collision_check(
-    heads: Query<(&Head, &Cell)>,
-    tails: Query<&Cell, With<Tail>>,
+    heads: Query<(&Head, &Transform)>,
+    tails: Query<&Transform, With<Tail>>,
     mut app_state: ResMut<NextState<AppState>>
 ) {
-    for (head, head_cell) in &heads {
-        let position = head_cell.position;
+    for (head, head_transform) in &heads {
+        let position = head_transform.translation;
 
-        if position.x < 0. || position.x >= BOARD_WIDTH || position.y < 0. || position.y >= BOARD_HEIGHT {
+        if position.x < -WIDTH / 2.
+            || position.x > WIDTH / 2.
+            || position.y < -HEIGHT / 2.
+            || position.y > HEIGHT / 2.
+        {
             app_state.set(AppState::LoseScreen);
         }
 
         if head.body.len() >= 3 {
-            for tail_cell in head.body.iter().cloned().map(|e| tails.get(e).unwrap()) {
-                if tail_cell.position == position && head.body.len() != 2 {
+            for tail_position in head.body.iter().cloned().map(|e| tails.get(e).unwrap().translation) {
+                if tail_position == position {
                     app_state.set(AppState::LoseScreen);
                 }
             }
@@ -392,33 +389,33 @@ fn snake_collision_check(
 }
 
 
-fn spawn_apple(commands: &mut Commands, position: Vec2) {
+fn spawn_apple(commands: &mut Commands, position: Vec3) {
     commands.spawn(SpriteBundle {
         sprite: Sprite {
             color: APPLE_COLOR,
             custom_size: Vec2::new(CELL_SIZE - CELL_MARGIN, CELL_SIZE - CELL_MARGIN).into(),
             ..default()
         },
+        transform: Transform::from_translation(position),
         ..default()
     })
-    .insert(Apple)
-    .insert(Cell { position });
+    .insert(Apple);
 }
 
 fn spawn_first_apple(mut commands: Commands) {
-    spawn_apple(&mut commands, Vec2::new(10., 3.))
+    spawn_apple(&mut commands, tilemap_to_global(10, 3))
 }
 
 fn apple_collision(
     mut commands: Commands,
-    apples: Query<(Entity, &Cell), With<Apple>>,
-    heads: Query<(Entity, &Cell), With<Head>>,
+    apples: Query<(Entity, &Transform), With<Apple>>,
+    heads: Query<(Entity, &Transform), With<Head>>,
     mut apple_events: EventWriter<AppleEaten>,
     mut tail_events: EventWriter<SpawnTail>
 ) {
-    for (apple_entity, apple_cell) in &apples {
-        for (head_entity, head_cell) in &heads {
-            if head_cell.position == apple_cell.position {
+    for (apple_entity, apple_transform) in &apples {
+        for (head_entity, head_transform) in &heads {
+            if head_transform.translation == apple_transform.translation {
                 commands.entity(apple_entity).despawn_recursive();
                 apple_events.send(AppleEaten);
                 tail_events.send(SpawnTail(head_entity));
@@ -429,16 +426,16 @@ fn apple_collision(
 
 fn handle_apple_eaten(
     mut commands: Commands,
-    cells: Query<&Cell>,
+    transforms: Query<&Transform, Or<(With<Apple>, With<Tail>, With<Head>)>>,
     mut apple_events: EventReader<AppleEaten>,
     mut app_state: ResMut<NextState<AppState>>
 ) {
     if !apple_events.is_empty() {
         let positions = (0..BOARD_WIDTH as i32)
-            .map(|x| (0..BOARD_HEIGHT as i32).map(move |y| Vec2::new(x as f32, y as f32)))
+            .map(|x| (0..BOARD_HEIGHT as i32).map(move |y| tilemap_to_global(x, y)))
             .flatten()
-            .filter(|v| !cells.iter().any(|cell| cell.position == *v))
-            .collect::<Vec<Vec2>>();
+            .filter(|v| !transforms.iter().any(|t| t.translation == *v))
+            .collect::<Vec<Vec3>>();
 
         let mut rng = rand::thread_rng();
 
@@ -446,6 +443,7 @@ fn handle_apple_eaten(
             if let Some(apple_position) = positions.choose(&mut rng) {
                 spawn_apple(&mut commands, *apple_position);
             } else {
+                // We ran out of spots to spawn an apple
                 app_state.set(AppState::WinScreen);
             }
         }
