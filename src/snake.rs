@@ -119,8 +119,12 @@ fn snake_input(
 fn snake_collision_check(
     heads: Query<(&Head, &Transform)>,
     tails: Query<&Transform, With<Tail>>,
-    mut app_state: ResMut<NextState<AppState>>
+    mut app_state: ResMut<NextState<AppState>>,
+
+    asset_server: Res<AssetServer>,
+    audio: Res<Audio>
 ) {
+
     for (head, head_transform) in &heads {
         let position = head_transform.translation;
 
@@ -129,12 +133,14 @@ fn snake_collision_check(
             || position.y < -HEIGHT / 2.
             || position.y > HEIGHT / 2.
         {
+            audio.play(asset_server.load("fail.ogg"));
             app_state.set(AppState::LoseScreen);
         }
 
         if head.body.len() >= 3 {
             for tail_position in head.body.iter().cloned().map(|e| tails.get(e).unwrap().translation) {
                 if tail_position == position {
+                    audio.play(asset_server.load("fail.ogg"));
                     app_state.set(AppState::LoseScreen);
                 }
             }

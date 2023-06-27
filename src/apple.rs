@@ -36,7 +36,7 @@ fn apple_collision(
     apples: Query<(Entity, &Transform), With<Apple>>,
     heads: Query<(Entity, &Transform), With<Head>>,
     mut apple_events: EventWriter<AppleEaten>,
-    mut tail_events: EventWriter<SpawnTail>
+    mut tail_events: EventWriter<SpawnTail>,
 ) {
     for (apple_entity, apple_transform) in &apples {
         for (head_entity, head_transform) in &heads {
@@ -54,9 +54,15 @@ fn handle_apple_eaten(
     transforms: Query<&Transform, Or<(With<Apple>, With<Tail>, With<Head>)>>,
     mut apple_events: EventReader<AppleEaten>,
     mut app_state: ResMut<NextState<AppState>>,
-    mut score: ResMut<ScoreManager>
+    mut score: ResMut<ScoreManager>,
+    asset_server: Res<AssetServer>,
+    audio: Res<Audio>,
 ) {
+
     if !apple_events.is_empty() {
+        let sound = asset_server.load("apple.ogg");
+        audio.play(sound);
+
         score.score += 1;
 
         let positions = (0..BOARD_WIDTH as i32)
